@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { getDatabase, ref, set, onValue, remove, push } from "firebase/database";
 import { initializeApp } from "firebase/app";
-
+// https://contact-form-2-405610-default-rtdb.firebaseio.com/
 const firebaseConfig = {
   apiKey: "AIzaSyB3-LW70CnKpUpkcnbTuLmX2lpheHrPliI",
-  authDomain: "contact-form-2-405610.firebaseapp.com",
+  authDomain: "https://contact-form-2-405610-default-rtdb.firebaseio.com",
   projectId: "contact-form-2-405610",
   storageBucket: "contact-form-2-405610.firebasestorage.app",
   messagingSenderId: "200076844672",
