@@ -1,49 +1,59 @@
 import React, { useEffect, useRef, useState } from "react";
-import { database, ref, set, onValue, remove, push } from "./Firebase"; // Adjust if you're exporting differently
+import { getDatabase, ref, set, onValue, remove, push } from "firebase/database";
+import { initializeApp } from "firebase/app";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyB3-LW70CnKpUpkcnbTuLmX2lpheHrPliI",
+  authDomain: "contact-form-2-405610.firebaseapp.com",
+  projectId: "contact-form-2-405610",
+  storageBucket: "contact-form-2-405610.firebasestorage.app",
+  messagingSenderId: "200076844672",
+  appId: "1:200076844672:web:daf2b3178791665e88d065",
+  measurementId: "G-M7MNNC029J"
+};
+
+const app = initializeApp(firebaseConfig);
+const database = getDatabase(app);
 
 const servers = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" }
-  ]
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
 
 function VideoCall() {
   const [callId, setCallId] = useState("");
-  const [mediaReady, setMediaReady] = useState(false);
   const [roomCreated, setRoomCreated] = useState(false);
-
   const pc = useRef(null);
   const localStream = useRef(null);
-  const remoteStream = useRef(new MediaStream());
+  const remoteStream = useRef(null);
+
   const localVideo = useRef(null);
   const remoteVideo = useRef(null);
 
-  // Initialize camera and mic
   useEffect(() => {
-    const getMedia = async () => {
+    async function startMedia() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         localStream.current = stream;
         localVideo.current.srcObject = stream;
+
+        remoteStream.current = new MediaStream();
         remoteVideo.current.srcObject = remoteStream.current;
-        setMediaReady(true);
       } catch (err) {
-        console.error("Media error:", err);
-        alert("Please allow camera and mic access.");
+        alert("Could not get media: " + err.message);
       }
-    };
-    getMedia();
+    }
+    startMedia();
   }, []);
 
-  // Create peer connection
   const createPeerConnection = () => {
     pc.current = new RTCPeerConnection(servers);
 
+    // Add local tracks to peer connection
     localStream.current.getTracks().forEach(track => {
       pc.current.addTrack(track, localStream.current);
     });
 
+    // Add remote tracks to remote stream
     pc.current.ontrack = event => {
       event.streams[0].getTracks().forEach(track => {
         remoteStream.current.addTrack(track);
@@ -52,48 +62,60 @@ function VideoCall() {
 
     pc.current.onicecandidate = event => {
       if (event.candidate) {
-        const candidatePath = `calls/${callId}/candidates/${roomCreated ? "offer" : "answer"}`;
-        const candidateRef = ref(database, candidatePath);
-        const newCandidate = push(candidateRef);
-        set(newCandidate, event.candidate.toJSON());
+        console.log("Sending ICE candidate:", event.candidate);
+        const candidatesRef = ref(database, `calls/${callId}/candidates/${roomCreated ? "offer" : "answer"}`);
+        // Push instead of set so multiple candidates are saved
+        push(candidatesRef, event.candidate.toJSON());
       }
     };
   };
 
-  // Create call (offer side)
   const createCall = async () => {
-    if (!mediaReady || !callId) return alert("Set call ID and wait for media.");
+    if (!callId) {
+      alert("Please enter a Call ID");
+      return;
+    }
 
     createPeerConnection();
     setRoomCreated(true);
 
     const offer = await pc.current.createOffer();
     await pc.current.setLocalDescription(offer);
+
     await set(ref(database, `calls/${callId}/offer`), offer);
+    console.log("Offer set in DB");
 
     // Listen for answer
     onValue(ref(database, `calls/${callId}/answer`), async snapshot => {
       const data = snapshot.val();
       if (data && !pc.current.currentRemoteDescription) {
+        console.log("Answer received", data);
         const answerDesc = new RTCSessionDescription(data);
         await pc.current.setRemoteDescription(answerDesc);
       }
     });
 
-    // Listen for remote candidates (answer side)
+    // Listen for answer ICE candidates
     onValue(ref(database, `calls/${callId}/candidates/answer`), snapshot => {
       const candidates = snapshot.val();
       if (candidates) {
         Object.values(candidates).forEach(async candidate => {
-          await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+          try {
+            await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log("Added ICE candidate from answer");
+          } catch (err) {
+            console.error("Error adding ICE candidate:", err);
+          }
         });
       }
     });
   };
 
-  // Join call (answer side)
   const joinCall = async () => {
-    if (!mediaReady || !callId) return alert("Set call ID and wait for media.");
+    if (!callId) {
+      alert("Please enter a Call ID");
+      return;
+    }
 
     createPeerConnection();
 
@@ -102,10 +124,16 @@ function VideoCall() {
       const data = snapshot.val();
       if (!data?.offer) return;
 
-      await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-      const answer = await pc.current.createAnswer();
-      await pc.current.setLocalDescription(answer);
-      await set(ref(database, `calls/${callId}/answer`), answer);
+      if (!pc.current.currentRemoteDescription) {
+        console.log("Offer received", data.offer);
+        await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+        const answer = await pc.current.createAnswer();
+        await pc.current.setLocalDescription(answer);
+
+        await set(ref(database, `calls/${callId}/answer`), answer);
+        console.log("Answer sent");
+      }
     });
 
     // Listen for offer ICE candidates
@@ -113,47 +141,39 @@ function VideoCall() {
       const candidates = snapshot.val();
       if (candidates) {
         Object.values(candidates).forEach(async candidate => {
-          await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+          try {
+            await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log("Added ICE candidate from offer");
+          } catch (err) {
+            console.error("Error adding ICE candidate:", err);
+          }
         });
       }
     });
   };
 
-  // End call
   const hangUp = async () => {
-    if (pc.current) {
-      pc.current.close();
-      pc.current = null;
-    }
-
-    if (localStream.current) {
-      localStream.current.getTracks().forEach(track => track.stop());
-    }
-
+    pc.current?.close();
     await remove(ref(database, `calls/${callId}`));
     setCallId("");
     setRoomCreated(false);
-    setMediaReady(false);
-    window.location.reload(); // Quick cleanup
   };
 
   return (
-    <div style={{ textAlign: "center" }}>
-      <h2>🔴 WebRTC Video Call</h2>
+    <div>
+      <h2>WebRTC Video Call</h2>
       <input
         type="text"
         placeholder="Enter Call ID"
         value={callId}
         onChange={e => setCallId(e.target.value)}
-        style={{ padding: 8, marginBottom: 10, color: "#fff" }}
       />
-      <br />
-      <button onClick={createCall} disabled={!mediaReady || !callId}>Create Call</button>
-      <button onClick={joinCall} disabled={!mediaReady || !callId}>Join Call</button>
+      <button onClick={createCall}>Create Call</button>
+      <button onClick={joinCall}>Join Call</button>
       <button onClick={hangUp}>Hang Up</button>
 
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 20 }}>
-        <video ref={localVideo} autoPlay muted playsInline style={{ width: 300, marginRight: 20 }} />
+      <div>
+        <video ref={localVideo} autoPlay muted playsInline style={{ width: 300, marginRight: 10 }} />
         <video ref={remoteVideo} autoPlay playsInline style={{ width: 300 }} />
       </div>
     </div>
